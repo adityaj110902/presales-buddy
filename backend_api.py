@@ -34,7 +34,7 @@ CORS(app)
 # CONFIGURATION
 # ===============================================================
 OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://localhost:11434')
-MODEL_NAME = 'llama2:latest'  # Lighter model - fits in 4GB Docker limit
+MODEL_NAME = 'tinyllama:latest'  # Lighter model - fits in 4GB Docker limit
 EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2'
 
 # ===============================================================

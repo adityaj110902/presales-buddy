@@ -34,7 +34,7 @@ sleep 10\n\
 \n\
 # Pull Llama 2 model (lighter than Llama 3.1)\n\
 echo "Pulling Llama 2 model..."\n\
-ollama pull llama2:latest\n\
+ollama pull tinyllama:latest
 \n\
 # Start Flask backend\n\
 echo "Starting Flask backend..."\n\
