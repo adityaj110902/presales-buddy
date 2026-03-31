@@ -1,6 +1,6 @@
 """
-PreSales Buddy - Flask Backend API with Advanced System Prompt
-Serves RAG responses with detailed LLM instructions
+PreSales Buddy - Flask Backend (Simplified - No langchain-community conflicts)
+Direct FAISS + sentence-transformers + Ollama
 """
 
 from flask import Flask, request, jsonify
@@ -8,15 +8,20 @@ from flask_cors import CORS
 import os
 import pandas as pd
 import warnings
+import json
 
 warnings.filterwarnings('ignore')
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import OllamaLLM
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
+from sentence_transformers import SentenceTransformer
+from faiss import IndexFlatL2
+import numpy as np
+import requests
+
+# PDF reading
+try:
+    import PyPDF2
+except:
+    PyPDF2 = None
 
 
 # ===============================================================
@@ -26,9 +31,16 @@ app = Flask(__name__)
 CORS(app)
 
 # ===============================================================
-# ADVANCED SYSTEM PROMPT FOR LLM
+# CONFIGURATION
 # ===============================================================
-SYSTEM_PROMPT = """You are PreSales Buddy, an expert Sales Intelligence Assistant for BUSINESSNEXT (a CRM/Sales platform).
+OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://localhost:11434')
+MODEL_NAME = 'llama3.1:latest'
+EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2'
+
+# ===============================================================
+# SYSTEM PROMPT
+# ===============================================================
+SYSTEM_PROMPT = """You are PreSales Buddy, an expert Sales Intelligence Assistant for BUSINESSNEXT.
 
 YOUR ROLE:
 - Help Pre-Sales teams understand products, pricing, implementation
@@ -36,284 +48,208 @@ YOUR ROLE:
 - Provide consultative, data-driven responses
 - Be professional, confident, and solution-focused
 
-YOUR CORE PRINCIPLES:
-1. CLARITY - Give clear answers that non-technical people understand
-2. STRUCTURE - Organize responses with headings, bullets, examples
-3. CREDIBILITY - Use specific numbers, metrics, and examples
-4. IMPACT - Always show business value and ROI
-5. ACTION - End with next steps or related topics
-
 RESPONSE FORMAT - USE THIS EXACT STRUCTURE:
 
 📌 DIRECT ANSWER
-[1-2 sentence answer to their question - be direct and clear]
+[1-2 sentence answer - be direct and clear]
 
 🎯 KEY POINTS
 • Point 1 with specific detail
 • Point 2 with specific detail  
 • Point 3 with specific detail
-• Point 4 (if applicable)
 
 💡 EXAMPLE/CASE STUDY
-[Concrete example: "A sales team using X achieved Y result in Z timeframe"]
+[Concrete example with numbers]
 
 📊 METRICS/DATA
-[Include specific numbers: "87% conversion accuracy", "40% productivity boost", "$800K savings/year"]
+[Include specific numbers and percentages]
 
 ✅ WHY IT MATTERS
-[Explain business value: How does this impact revenue, costs, or productivity?]
+[Explain business value and impact]
 
 🔗 RELATED TOPICS
 [Suggest 2-3 related questions they might ask next]
 
-TONE AND STYLE GUIDELINES:
-✅ DO:
-- Be professional but approachable
-- Use business language (ROI, productivity, revenue, efficiency)
-- Include specific numbers and percentages
-- Provide real examples or case studies
-- Show competitive advantages when relevant
-- Be consultative, not pushy
-- Acknowledge complexity when present
-- Suggest next logical steps
-
-❌ DON'T:
-- Use vague language ("many", "most", "some")
-- Write long paragraphs
-- Be overly technical
-- Make up numbers or facts
-- Ignore the actual question
-- Use corporate jargon without explaining
-- Sound like a generic salesperson
-- Be uncertain ("I think", "maybe", "possibly")
-
-HOW TO ANSWER DIFFERENT QUESTION TYPES:
-
-FOR FEATURE/PRODUCT QUESTIONS:
-1. State features clearly and specifically
-2. Explain what each feature does
-3. Give concrete example of how it's used
-4. Show the business impact (time saved, revenue impact, etc.)
-5. Suggest related features they might ask about
-
-FOR PRICING QUESTIONS:
-1. Give clear pricing breakdown with specifics
-2. Explain what's included at each tier
-3. Show ROI and payback period
-4. Compare to alternatives when relevant
-5. Mention contract terms, volume discounts
-
-FOR COMPETITOR COMPARISON:
-1. State advantages clearly (don't bash competitors)
-2. Use specific metrics: "40% cheaper", "4 weeks vs 16 weeks"
-3. Provide customer examples
-4. Show total cost of ownership
-5. Suggest detailed comparison matrix
-
-FOR IMPLEMENTATION QUESTIONS:
-1. Give specific timeline with breakdown
-2. Explain each phase and what happens
-3. Mention typical outcomes (adoption rates, time to productivity)
-4. Show what support is included
-5. Suggest training and change management topics
-
-FOR OBJECTION HANDLING:
-1. Address the concern directly
-2. Provide proof (certifications, case studies, guarantees)
-3. Show how we're different from alternatives
-4. Give specific examples
-5. Move toward next step
+TONE:
+✅ Professional but approachable
+✅ Use specific numbers (not "many", "most")
+✅ Include real examples
+✅ Show competitive advantages
+✅ Be consultative, not pushy
 
 CRITICAL RULES:
-- ALWAYS lead with the direct answer (don't say "It depends...")
-- ALWAYS use specific numbers (not "many", "most", "several")
+- ALWAYS lead with the direct answer
+- ALWAYS use specific numbers
 - ALWAYS include at least one example
 - ALWAYS show business value/ROI
-- NEVER make up facts or numbers
-- NEVER contradict yourself
-- NEVER ignore the question asked
-- NEVER respond with just "I don't know" - offer alternatives
-
-EMOJI USAGE FOR SCANNABILITY:
-📌 = Main answer/fact
-🎯 = Key points/details
-💡 = Examples/illustrations
-📊 = Data/metrics
-✅ = Value/benefit
-🔗 = Related topics
-⚠️ = Warnings/considerations
-🚀 = Next steps
-
-SALES CONTEXT REMEMBER:
-This is a pre-sales conversation. Focus on:
-- Value and benefits (not just features)
-- Competitive advantages (quantified)
-- Business impact (revenue, cost, productivity)
-- Proof points (case studies, metrics)
-- Risk mitigation (security, support, SLA)
-- Next steps toward sale
-
-QUALITY CHECKLIST BEFORE RESPONDING:
-□ Did I answer the actual question?
-□ Is my main point in the first sentence?
-□ Do I have 3-5 key points?
-□ Did I include a specific example?
-□ Do I have specific metrics/numbers?
-□ Did I explain the business value?
-□ Is my response scannable (not wall of text)?
-□ Did I suggest related topics?
-□ Would a busy executive understand this in 30 seconds?
-
-Now respond to the user's question using this format and these principles. Focus on being clear, structured, specific, and impact-driven."""
+- NEVER make up facts or numbers"""
 
 
 # ===============================================================
-# LOAD RAG PIPELINE
+# VECTOR DATABASE
 # ===============================================================
-def load_rag_pipeline():
-    """Load RAG pipeline once on startup"""
+class SimpleRAG:
+    def __init__(self):
+        self.embedder = SentenceTransformer(EMBEDDING_MODEL)
+        self.index = None
+        self.documents = []
+        self.metadata = []
     
+    def add_documents(self, texts, metadatas):
+        """Add documents to the vector store"""
+        print(f"Creating embeddings for {len(texts)} chunks...")
+        embeddings = self.embedder.encode(texts, show_progress_bar=True)
+        embeddings = np.array(embeddings).astype('float32')
+        
+        # Create FAISS index
+        dimension = embeddings.shape[1]
+        self.index = IndexFlatL2(dimension)
+        self.index.add(embeddings)
+        
+        self.documents = texts
+        self.metadata = metadatas
+        print(f"Vector store ready with {len(texts)} documents")
+    
+    def search(self, query, k=5):
+        """Search for relevant documents"""
+        if self.index is None:
+            return []
+        
+        query_embedding = self.embedder.encode([query])[0].astype('float32')
+        distances, indices = self.index.search(np.array([query_embedding]), k)
+        
+        results = []
+        for idx in indices[0]:
+            if idx < len(self.documents):
+                results.append({
+                    'text': self.documents[idx],
+                    'metadata': self.metadata[idx]
+                })
+        return results
+
+
+# ===============================================================
+# LOAD DOCUMENTS
+# ===============================================================
+def load_documents():
+    """Load documents from data folder"""
+    rag = SimpleRAG()
     data_folder = "./data"
     
     if not os.path.exists(data_folder):
         os.makedirs(data_folder)
-        return None, []
+        return rag, []
     
-    documents = []
+    all_texts = []
+    all_metadatas = []
     files_loaded = []
     
+    # Load all files
     for file in os.listdir(data_folder):
         if file.endswith((".pdf", ".txt", ".xlsx")):
             full_path = os.path.join(data_folder, file)
             
             try:
+                text = ""
+                
                 if file.endswith(".xlsx"):
                     df = pd.read_excel(full_path)
                     text = df.to_string()
-                    files_loaded.append(file)
-                    
+                
                 elif file.endswith(".txt"):
                     with open(full_path, 'r', encoding='utf-8') as f:
                         text = f.read()
-                    files_loaded.append(file)
-                    
-                elif file.endswith(".pdf"):
-                    try:
-                        import PyPDF2
-                        with open(full_path, 'rb') as f:
-                            pdf_reader = PyPDF2.PdfReader(f)
-                            text = "\n".join([page.extract_text() for page in pdf_reader.pages])
-                        files_loaded.append(file)
-                    except:
-                        text = f"[PDF: {file}]"
-                        files_loaded.append(file)
                 
-                documents.append((text, file))
+                elif file.endswith(".pdf") and PyPDF2:
+                    with open(full_path, 'rb') as f:
+                        pdf_reader = PyPDF2.PdfReader(f)
+                        text = "\n".join([page.extract_text() for page in pdf_reader.pages])
+                
+                if text:
+                    # Split into chunks
+                    chunk_size = 1000
+                    overlap = 200
+                    
+                    for i in range(0, len(text), chunk_size - overlap):
+                        chunk = text[i:i + chunk_size]
+                        if len(chunk) > 100:  # Only add non-trivial chunks
+                            all_texts.append(chunk)
+                            all_metadatas.append({"source": file, "chunk": i // chunk_size})
+                    
+                    files_loaded.append(file)
+                    print(f"Loaded: {file}")
             
             except Exception as e:
                 print(f"Error loading {file}: {str(e)}")
     
-    if not documents:
-        print(f"No documents found. Files loaded: {files_loaded}")
-        return None, files_loaded
+    if all_texts:
+        rag.add_documents(all_texts, all_metadatas)
+    else:
+        print("No documents found")
     
-    print(f"Loading {len(documents)} documents...")
-    
-    # Split into chunks
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-    
-    texts = []
-    metadatas = []
-    
-    for content, filename in documents:
-        chunks = splitter.split_text(content)
-        for idx, chunk in enumerate(chunks):
-            texts.append(chunk)
-            metadatas.append({"source": filename, "chunk": idx})
-    
-    print(f"Created {len(texts)} chunks from documents")
-    
-    # Create embeddings
-    print("Creating embeddings...")
-    embedding_model = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-    
-    # Create vector store
-    vectordb = FAISS.from_texts(
-        texts=texts,
-        embedding=embedding_model,
-        metadatas=metadatas
-    )
-    
-    retriever = vectordb.as_retriever(search_kwargs={"k": 5})
-    
-    # IMPROVED PROMPT TEMPLATE WITH SYSTEM INSTRUCTIONS
-    template = """{system_prompt}
-
-RELEVANT INFORMATION FROM COMPANY DOCUMENTS:
-{context}
-
-USER QUESTION: {question}
-
-Remember to use the exact response format with 📌, 🎯, 💡, 📊, ✅, and 🔗 sections.
-Provide a clear, structured, and professional response."""
-    
-    prompt = PromptTemplate(
-        input_variables=["system_prompt", "context", "question"],
-        template=template
-    )
-    
-    # Initialize LLM
-    print("Loading Llama 3.1 model...")
-    llm = OllamaLLM(model="llama3.1:latest")
-    
-    # Format documents
-    def format_docs(docs):
-        return "\n\n".join([f"[{d.metadata['source']}]\n{d.page_content}" for d in docs])
-    
-    # Build RAG chain with system prompt
-    rag_chain = (
-        {
-            "system_prompt": lambda x: SYSTEM_PROMPT,
-            "context": retriever | format_docs,
-            "question": lambda x: x
-        }
-        | prompt
-        | llm
-    )
-    
-    print("RAG pipeline loaded successfully!")
-    return rag_chain, files_loaded
+    return rag, files_loaded
 
 
 # Load on startup
 print("Starting PreSales Buddy Backend...")
-RAG_CHAIN, FILES_LOADED = load_rag_pipeline()
-print(f"Documents ready: {FILES_LOADED}")
+RAG, FILES_LOADED = load_documents()
 
 
 # ===============================================================
-# ROUTES
+# OLLAMA INTEGRATION
+# ===============================================================
+def chat_with_ollama(system_prompt, user_message, context=""):
+    """Call Ollama for chat completion"""
+    try:
+        full_prompt = f"""{system_prompt}
+
+CONTEXT FROM DOCUMENTS:
+{context}
+
+USER QUESTION: {user_message}
+
+Remember to use the exact response format with 📌 🎯 💡 📊 ✅ and 🔗 sections."""
+        
+        response = requests.post(
+            f'{OLLAMA_URL}/api/generate',
+            json={
+                'model': MODEL_NAME,
+                'prompt': full_prompt,
+                'stream': False,
+                'temperature': 0.7
+            },
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result.get('response', 'No response from Ollama')
+        else:
+            return f"Ollama error: {response.status_code}"
+    
+    except Exception as e:
+        return f"Error connecting to Ollama: {str(e)}"
+
+
+# ===============================================================
+# API ROUTES
 # ===============================================================
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    """Health check endpoint"""
+    """Health check"""
     return jsonify({
         'status': 'ok',
         'documents': len(FILES_LOADED),
-        'files': FILES_LOADED
+        'files': FILES_LOADED,
+        'rag_ready': RAG.index is not None,
+        'llm': 'Ollama (Llama 3.1)'
     })
 
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
     """Main chat endpoint"""
-    
     try:
         data = request.json
         question = data.get('message', '').strip()
@@ -321,12 +257,22 @@ def chat():
         if not question:
             return jsonify({'error': 'No message provided'}), 400
         
-        if RAG_CHAIN is None:
+        if RAG.index is None:
             return jsonify({'error': 'No documents loaded'}), 503
         
-        # Get response from RAG with system prompt
-        print(f"Processing: {question}")
-        response = RAG_CHAIN.invoke(question)
+        # Search for relevant documents
+        print(f"Searching for: {question}")
+        results = RAG.search(question, k=5)
+        
+        # Format context
+        context = "\n\n".join([
+            f"[{r['metadata']['source']}]\n{r['text']}" 
+            for r in results
+        ])
+        
+        # Get response from Ollama
+        print("Calling Ollama...")
+        response = chat_with_ollama(SYSTEM_PROMPT, question, context)
         
         return jsonify({
             'success': True,
@@ -344,7 +290,7 @@ def chat():
 
 @app.route('/api/documents', methods=['GET'])
 def get_documents():
-    """Get list of loaded documents"""
+    """Get loaded documents"""
     return jsonify({
         'count': len(FILES_LOADED),
         'documents': FILES_LOADED
@@ -355,10 +301,11 @@ def get_documents():
 def get_status():
     """Get system status"""
     return jsonify({
-        'status': 'ready' if RAG_CHAIN else 'no_documents',
+        'status': 'ready' if RAG.index else 'no_documents',
         'documents_count': len(FILES_LOADED),
         'files': FILES_LOADED,
-        'model': 'llama3.1:latest'
+        'llm': 'Ollama (Llama 3.1)',
+        'embedding_model': 'all-MiniLM-L6-v2'
     })
 
 
@@ -381,18 +328,19 @@ def server_error(error):
 # ===============================================================
 
 if __name__ == '__main__':
-    print("\n" + "="*50)
-    print("PreSales Buddy Backend API")
-    print("="*50)
+    print("\n" + "="*60)
+    print("PreSales Buddy Backend API (Simplified)")
+    print("="*60)
     print(f"Documents loaded: {len(FILES_LOADED)}")
     print(f"Files: {FILES_LOADED}")
+    print(f"RAG Status: {'Ready' if RAG.index else 'No documents'}")
     print("\nAPI Endpoints:")
     print("  GET  /api/health      - Health check")
     print("  POST /api/chat        - Chat endpoint")
     print("  GET  /api/documents   - Get documents")
     print("  GET  /api/status      - System status")
     print("\nServer starting on http://0.0.0.0:5000")
-    print("="*50 + "\n")
+    print("="*60 + "\n")
     
     app.run(
         host='0.0.0.0',
