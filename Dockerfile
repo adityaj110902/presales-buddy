@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Ollama
-RUN curl -fsSL https://ollama.ai/install.sh | sh || echo "Ollama install script failed, will try alternative"
+RUN curl -fsSL https://ollama.ai/install.sh | sh || echo "Ollama install script failed"
 
 # Set working directory
 WORKDIR /app
@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Expose ports
 EXPOSE 5000 11434
 
-# Create startup script
+# Create startup script with Llama 2 (lighter model)
 RUN echo '#!/bin/bash\n\
 # Start Ollama in background\n\
 echo "Starting Ollama..."\n\
@@ -32,13 +32,13 @@ OLLAMA_PID=$!\n\
 # Wait for Ollama to start\n\
 sleep 10\n\
 \n\
-# Pull model\n\
-echo "Pulling Llama 3.1 model..."\n\
-ollama pull llama3.1:latest\n\
+# Pull Llama 2 model (lighter than Llama 3.1)\n\
+echo "Pulling Llama 2 model..."\n\
+ollama pull llama2:latest\n\
 \n\
 # Start Flask backend\n\
 echo "Starting Flask backend..."\n\
-exec python backend_api.py\n\
+exec python backend_api_simple.py\n\
 ' > /app/start.sh && chmod +x /app/start.sh
 
 # Run startup script

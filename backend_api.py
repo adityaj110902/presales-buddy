@@ -34,7 +34,7 @@ CORS(app)
 # CONFIGURATION
 # ===============================================================
 OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://localhost:11434')
-MODEL_NAME = 'llama3.1:latest'
+MODEL_NAME = 'llama2:latest'  # Lighter model - fits in 4GB Docker limit
 EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2'
 
 # ===============================================================
@@ -213,7 +213,7 @@ Remember to use the exact response format with 📌 🎯 💡 📊 ✅ and 🔗 
         response = requests.post(
             f'{OLLAMA_URL}/api/generate',
             json={
-                'model': MODEL_NAME,
+                'model': 'llama2:latest',
                 'prompt': full_prompt,
                 'stream': False,
                 'temperature': 0.7
@@ -243,7 +243,7 @@ def health():
         'documents': len(FILES_LOADED),
         'files': FILES_LOADED,
         'rag_ready': RAG.index is not None,
-        'llm': 'Ollama (Llama 3.1)'
+        'llm': 'Ollama (Llama 2 7B)'
     })
 
 
@@ -304,7 +304,7 @@ def get_status():
         'status': 'ready' if RAG.index else 'no_documents',
         'documents_count': len(FILES_LOADED),
         'files': FILES_LOADED,
-        'llm': 'Ollama (Llama 3.1)',
+        'llm': 'Ollama (Llama 2 7B)',
         'embedding_model': 'all-MiniLM-L6-v2'
     })
 
